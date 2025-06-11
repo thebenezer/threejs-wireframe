@@ -1,4 +1,4 @@
-export default `varying vec3 vBarycentric;
+varying vec3 vBarycentric;
 varying float vEven;
 varying vec2 vUv;
 varying vec3 vPosition;
@@ -229,4 +229,4 @@ vec4 getStyledWireframe (vec3 barycentric) {
 
 void main () {
   gl_FragColor = getStyledWireframe(vBarycentric);
-}`;
+}
