@@ -5,6 +5,7 @@ export function addBarycentricCoordinates(bufferGeometry, removeEdge = false) {
 		bufferGeometry.getIndex() || bufferGeometry.getAttribute("position");
 	const count = attrib.count / 3;
 	const barycentric = [];
+	const evenValues = [];
 
 	// for each triangle in the geometry, add the barycentric coordinates
 	for (let i = 0; i < count; i++) {
@@ -12,15 +13,22 @@ export function addBarycentricCoordinates(bufferGeometry, removeEdge = false) {
 		const Q = removeEdge ? 1 : 0;
 		if (even) {
 			barycentric.push(0, 0, 1, 0, 1, 0, 1, 0, Q);
+			evenValues.push(1, 1, 1); // 3 vertices per triangle
 		} else {
 			barycentric.push(0, 1, 0, 0, 0, 1, 1, 0, Q);
+			evenValues.push(0, 0, 0); // 3 vertices per triangle
 		}
 	}
 
-	// add the attribute to the geometry
-	const array = new Float32Array(barycentric);
-	const attribute = new THREE.BufferAttribute(array, 3);
-	bufferGeometry.setAttribute("barycentric", attribute);
+	// add the barycentric attribute to the geometry
+	const baryArray = new Float32Array(barycentric);
+	const baryAttribute = new THREE.BufferAttribute(baryArray, 3);
+	bufferGeometry.setAttribute("barycentric", baryAttribute);
+
+	// add the even attribute to the geometry
+	const evenArray = new Float32Array(evenValues);
+	const evenAttribute = new THREE.BufferAttribute(evenArray, 1);
+	bufferGeometry.setAttribute("even", evenAttribute);
 }
 
 export function unindexBufferGeometry(bufferGeometry) {

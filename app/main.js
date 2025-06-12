@@ -1,49 +1,70 @@
 import * as THREE from "three";
 import { NURBSCurve } from "three/examples/jsm/curves/NURBSCurve.js";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GUI } from "lil-gui";
 import palettes from "nice-color-palettes";
 import {
 	WireframeMaterial,
 	prepareWireframeGeometry,
-} from "../lib/WireframeMaterial.js";
+} from "../wireframeMatUtils/WireframeMaterial.js";
 
-class WireframeRenderer {
+class WireframeDemo {
 	constructor(canvas) {
+		this.meshes = [];
 		this.canvas = canvas;
 		this.palette = palettes[13].slice();
 		this.background = this.palette.shift();
 
-		this.initRenderer();
-		this.initScene();
-		this.initMaterial();
-		this.initMesh();
-		this.initGUI();
-
-		this.clock = new THREE.Clock();
-		this.isAnimating = false;
-
-		this.setupEventListeners();
-		this.start();
-	}
-
-	initRenderer() {
 		this.renderer = new THREE.WebGLRenderer({
 			antialias: true,
 			canvas: this.canvas,
 		});
-
-		const gl = this.renderer.getContext();
-		gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
-
+		this.renderer.setSize(window.innerWidth, window.innerHeight);
 		this.renderer.setClearColor(this.background, 1);
 		this.renderer.setPixelRatio(window.devicePixelRatio);
 
 		this.canvas.style.background = this.background;
+
+		this.scene = new THREE.Scene();
+		this.camera = new THREE.PerspectiveCamera(
+			45,
+			window.innerWidth / window.innerHeight,
+			0.01,
+			100
+		);
+		this.camera.position.set(5, 3, 5);
+		this.initControls();
+		this.init();
+		this.setupGUI();
+
+		this.clock = new THREE.Clock();
+		this.autoRotate = true;
+
+		this.resize();
+		this.setupEventListeners();
+
+		// Make canvas visible once everything is initialized
+		this.canvas.style.visibility = "visible";
 	}
 
-	initScene() {
-		this.scene = new THREE.Scene();
-		this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+	init() {
+		this.initMaterial();
+		// Create cube
+		const cubeGeometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+		const preparedCubeGeometry = prepareWireframeGeometry(cubeGeometry, true);
+		const cubeMesh = new THREE.Mesh(preparedCubeGeometry, this.material);
+		cubeMesh.position.set(-2, 0, 0);
+
+		// Create torus
+		const torusGeometry = GeometryFactory.create("Torus");
+		const preparedTorusGeometry = prepareWireframeGeometry(torusGeometry, true);
+		const torusMesh = new THREE.Mesh(preparedTorusGeometry, this.material);
+		torusMesh.position.set(2, 0, 0);
+
+		// Add to scene and store references
+		this.scene.add(cubeMesh);
+		this.scene.add(torusMesh);
+		this.meshes.push(cubeMesh, torusMesh);
 	}
 
 	initMaterial() {
@@ -60,62 +81,65 @@ class WireframeRenderer {
 		});
 	}
 
-	initMesh() {
-		this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.material);
-		this.scene.add(this.mesh);
+	animate = () => {
+		this.renderer.render(this.scene, this.camera);
+		const time = this.clock.getElapsedTime();
+
+		// Update orbit controls
+		this.controls.update();
+		this.material.updateTime(time);
+
+		// Update all meshes in demo scene
+		this.meshes.forEach((mesh) => {
+			if (mesh.material && mesh.material.updateTime) {
+				mesh.material.updateTime(time);
+			}
+		});
+		requestAnimationFrame(this.animate);
+	};
+
+	updateColors(backgroundHex, fillHex, strokeHex) {
+		this.canvas.style.background = backgroundHex;
+		this.renderer.setClearColor(backgroundHex, 1.0);
+		this.material.uniforms.fill.value.setStyle(fillHex);
+		this.material.uniforms.stroke.value.setStyle(strokeHex);
+
+		// Update demo scene materials
+		this.meshes.forEach((mesh, index) => {
+			if (mesh.material && mesh.material.uniforms) {
+				const fillIndex = index * 2;
+				const strokeIndex = index * 2 + 1;
+				mesh.material.uniforms.fill.value.setStyle(
+					this.palette[fillIndex] || fillHex
+				);
+				mesh.material.uniforms.stroke.value.setStyle(
+					this.palette[strokeIndex] || strokeHex
+				);
+			}
+		});
 	}
 
-	initGUI() {
-		this.gui = new GUI();
-		this.guiController = new GUIController(this);
-	}
+	updateUniforms(updates) {
+		Object.entries(updates).forEach(([key, value]) => {
+			if (this.material.uniforms[key]) {
+				this.material.uniforms[key].value = value;
+			}
+		});
 
+		// Update demo scene materials
+		this.meshes.forEach((mesh) => {
+			if (mesh.material && mesh.material.uniforms) {
+				Object.entries(updates).forEach(([key, value]) => {
+					if (mesh.material.uniforms[key]) {
+						mesh.material.uniforms[key].value = value;
+					}
+				});
+			}
+		});
+	}
 	setupEventListeners() {
 		window.addEventListener("resize", () => this.resize());
 	}
-
-	start() {
-		this.createGeometry();
-		this.guiController.setup();
-		this.resize();
-		this.canvas.style.visibility = "";
-		this.animate();
-	}
-
-	animate = () => {
-		if (!this.isAnimating) return;
-		requestAnimationFrame(this.animate);
-		this.update();
-		this.draw();
-	};
-
-	startAnimation() {
-		this.isAnimating = true;
-		this.animate();
-	}
-
-	stopAnimation() {
-		this.isAnimating = false;
-	}
-
-	update() {
-		const time = this.clock.getElapsedTime();
-		const radius = 4;
-		const angle = (time * 2.5 * Math.PI) / 180;
-
-		this.camera.position.set(
-			Math.cos(angle) * radius,
-			0,
-			Math.sin(angle) * radius
-		);
-		this.camera.lookAt(new THREE.Vector3());
-		this.material.updateTime(time);
-	}
-
-	draw() {
-		this.renderer.render(this.scene, this.camera);
-	}
-
 	resize(
 		width = window.innerWidth,
 		height = window.innerHeight,
@@ -125,17 +149,7 @@ class WireframeRenderer {
 		this.renderer.setSize(width, height);
 		this.camera.aspect = width / height;
 		this.camera.updateProjectionMatrix();
-		this.draw();
 	}
-
-	createGeometry(type = "TorusKnot", edgeRemoval = true) {
-		if (this.mesh.geometry) this.mesh.geometry.dispose();
-
-		const geometry = GeometryFactory.create(type);
-		const preparedGeometry = prepareWireframeGeometry(geometry, edgeRemoval);
-		this.mesh.geometry = preparedGeometry;
-	}
-
 	saveScreenshot() {
 		const width = 2048;
 		const height = 2048;
@@ -149,28 +163,153 @@ class WireframeRenderer {
 		link.href = dataURI;
 		link.click();
 	}
-
-	updateColors(backgroundHex, fillHex, strokeHex) {
-		this.canvas.style.background = backgroundHex;
-		this.renderer.setClearColor(backgroundHex, 1.0);
-		this.material.uniforms.fill.value.setStyle(fillHex);
-		this.material.uniforms.stroke.value.setStyle(strokeHex);
+	initControls() {
+		this.controls = new OrbitControls(this.camera, this.canvas);
+		this.controls.enableDamping = true;
+		this.controls.dampingFactor = 0.05;
+		this.controls.autoRotate = false;
+		this.controls.autoRotateSpeed = 2.0;
 	}
+	setupGUI() {
+		this.gui = new GUI();
 
-	updateUniforms(updates) {
-		Object.entries(updates).forEach(([key, value]) => {
-			if (this.material.uniforms[key]) {
-				this.material.uniforms[key].value = value;
+		// Setup GUI data
+		const guiData = {
+			backgroundHex: this.background,
+			fillHex: `#${this.material.uniforms.fill.value.getHexString()}`,
+			strokeHex: `#${this.material.uniforms.stroke.value.getHexString()}`,
+			randomColors: () => this.randomColors(),
+			saveScreenshot: () => this.saveScreenshot(),
+		};
+
+		// Add uniforms to GUI data
+		Object.entries(this.material.uniforms).forEach(([key, uniform]) => {
+			if (
+				typeof uniform.value === "boolean" ||
+				typeof uniform.value === "number"
+			) {
+				guiData[key] = uniform.value;
 			}
 		});
+
+		const shader = this.gui.addFolder("Shader");
+
+		// Shader controls
+		shader
+			.add(guiData, "seeThrough")
+			.name("See Through")
+			.onChange(() => this.updateUniforms(guiData));
+		shader
+			.add(guiData, "thickness", 0.005, 0.2)
+			.step(0.001)
+			.name("Thickness")
+			.onChange(() => this.updateUniforms(guiData));
+		shader
+			.addColor(guiData, "backgroundHex")
+			.name("Background")
+			.onChange(() => this.updateColors(guiData));
+		shader
+			.addColor(guiData, "fillHex")
+			.name("Fill")
+			.onChange(() => this.updateColors(guiData));
+		shader
+			.addColor(guiData, "strokeHex")
+			.name("Stroke")
+			.onChange(() => this.updateColors(guiData));
+		shader.add(guiData, "randomColors").name("Random Palette");
+		shader.add(guiData, "saveScreenshot").name("Save PNG");
+
+		// Dash controls
+		const dash = shader.addFolder("Dash");
+		dash
+			.add(guiData, "dashEnabled")
+			.name("Enabled")
+			.onChange(() => this.updateUniforms(guiData));
+		dash
+			.add(guiData, "dashAnimate")
+			.name("Animate")
+			.onChange(() => this.updateUniforms(guiData));
+		dash
+			.add(guiData, "dashRepeats", 1, 10)
+			.step(1)
+			.name("Repeats")
+			.onChange(() => this.updateUniforms(guiData));
+		dash
+			.add(guiData, "dashLength", 0, 1)
+			.step(0.01)
+			.name("Length")
+			.onChange(() => this.updateUniforms(guiData));
+		dash
+			.add(guiData, "dashOverlap")
+			.name("Overlap Join")
+			.onChange(() => this.updateUniforms(guiData));
+
+		// Effects controls
+		const effects = shader.addFolder("Effects");
+		effects
+			.add(guiData, "noiseA")
+			.name("Noise Big")
+			.onChange(() => this.updateUniforms(guiData));
+		effects
+			.add(guiData, "noiseB")
+			.name("Noise Small")
+			.onChange(() => this.updateUniforms(guiData));
+		effects
+			.add(guiData, "insideAltColor")
+			.name("Backface Color")
+			.onChange(() => this.updateUniforms(guiData));
+		effects
+			.add(guiData, "squeeze")
+			.name("Squeeze")
+			.onChange(() => this.updateUniforms(guiData));
+		effects
+			.add(guiData, "squeezeMin", 0, 1)
+			.step(0.01)
+			.name("Squeeze Min")
+			.onChange(() => this.updateUniforms(guiData));
+		effects
+			.add(guiData, "squeezeMax", 0, 1)
+			.step(0.01)
+			.name("Squeeze Max")
+			.onChange(() => this.updateUniforms(guiData));
+		effects
+			.add(guiData, "dualStroke")
+			.name("Dual Stroke")
+			.onChange(() => this.updateUniforms(guiData));
+		effects
+			.add(guiData, "secondThickness", 0, 0.2)
+			.step(0.001)
+			.name("Dual Thick")
+			.onChange(() => this.updateUniforms(guiData));
+
+		// Check if mobile and close GUI
+		const isMobile = /(Android|iPhone|iOS|iPod|iPad)/i.test(
+			navigator.userAgent
+		);
+		if (isMobile) {
+			this.gui.close();
+		}
+
+		// Store guiData for randomColors method
+		this.guiData = guiData;
 	}
 
-	dispose() {
-		this.stopAnimation();
-		this.mesh.geometry?.dispose();
-		this.material.dispose();
-		this.gui.destroy();
-		window.removeEventListener("resize", this.resize);
+	randomColors() {
+		this.palette =
+			palettes[Math.floor(Math.random() * palettes.length)].slice();
+		this.background = this.palette.shift();
+		this.guiData.backgroundHex = this.background;
+		this.guiData.fillHex = this.palette[0];
+		this.guiData.strokeHex = this.palette[1];
+		this.updateColors(
+			this.guiData.backgroundHex,
+			this.guiData.fillHex,
+			this.guiData.strokeHex
+		);
+
+		this.gui.controllersRecursive().forEach((controller) => {
+			controller.updateDisplay();
+		});
 	}
 }
 
@@ -193,6 +332,9 @@ class GeometryFactory {
 
 			case "Torus":
 				return new THREE.TorusGeometry(1, 0.3, 8, 30);
+
+			case "Cube":
+				return new THREE.BoxGeometry(1.5, 1.5, 1.5);
 
 			default:
 				return new THREE.TorusKnotGeometry(0.7, 0.3, 30, 4);
@@ -233,210 +375,12 @@ class GeometryFactory {
 	}
 }
 
-class GUIController {
-	constructor(renderer) {
-		this.renderer = renderer;
-		this.guiData = this.initGuiData();
-	}
-
-	initGuiData() {
-		const data = {
-			name: "TorusKnot",
-			edgeRemoval: true,
-			backgroundHex: this.renderer.background,
-			saveScreenshot: () => this.renderer.saveScreenshot(),
-			fillHex: `#${this.renderer.material.uniforms.fill.value.getHexString()}`,
-			strokeHex: `#${this.renderer.material.uniforms.stroke.value.getHexString()}`,
-			randomColors: () => this.randomColors(),
-		};
-
-		// Add uniforms to GUI data
-		Object.entries(this.renderer.material.uniforms).forEach(
-			([key, uniform]) => {
-				if (
-					typeof uniform.value === "boolean" ||
-					typeof uniform.value === "number"
-				) {
-					data[key] = uniform.value;
-				}
-			}
-		);
-
-		return data;
-	}
-
-	setup() {
-		const shader = this.renderer.gui.addFolder("Shader");
-
-		this.setupShaderControls(shader);
-		this.setupDashControls(shader);
-		this.setupEffectsControls(shader);
-		this.setupGeometryControls(shader);
-
-		this.checkMobileAndClose();
-		this.updateAll();
-	}
-
-	setupShaderControls(shader) {
-		shader
-			.add(this.guiData, "seeThrough")
-			.name("See Through")
-			.onChange(() => this.updateUniforms());
-		shader
-			.add(this.guiData, "thickness", 0.005, 0.2)
-			.step(0.001)
-			.name("Thickness")
-			.onChange(() => this.updateUniforms());
-		shader
-			.addColor(this.guiData, "backgroundHex")
-			.name("Background")
-			.onChange(() => this.updateColors());
-		shader
-			.addColor(this.guiData, "fillHex")
-			.name("Fill")
-			.onChange(() => this.updateColors());
-		shader
-			.addColor(this.guiData, "strokeHex")
-			.name("Stroke")
-			.onChange(() => this.updateColors());
-		shader.add(this.guiData, "randomColors").name("Random Palette");
-		shader.add(this.guiData, "saveScreenshot").name("Save PNG");
-	}
-
-	setupDashControls(shader) {
-		const dash = shader.addFolder("Dash");
-		dash
-			.add(this.guiData, "dashEnabled")
-			.name("Enabled")
-			.onChange(() => this.updateUniforms());
-		dash
-			.add(this.guiData, "dashAnimate")
-			.name("Animate")
-			.onChange(() => this.updateUniforms());
-		dash
-			.add(this.guiData, "dashRepeats", 1, 10)
-			.step(1)
-			.name("Repeats")
-			.onChange(() => this.updateUniforms());
-		dash
-			.add(this.guiData, "dashLength", 0, 1)
-			.step(0.01)
-			.name("Length")
-			.onChange(() => this.updateUniforms());
-		dash
-			.add(this.guiData, "dashOverlap")
-			.name("Overlap Join")
-			.onChange(() => this.updateUniforms());
-	}
-
-	setupEffectsControls(shader) {
-		const effects = shader.addFolder("Effects");
-		effects
-			.add(this.guiData, "noiseA")
-			.name("Noise Big")
-			.onChange(() => this.updateUniforms());
-		effects
-			.add(this.guiData, "noiseB")
-			.name("Noise Small")
-			.onChange(() => this.updateUniforms());
-		effects
-			.add(this.guiData, "insideAltColor")
-			.name("Backface Color")
-			.onChange(() => this.updateUniforms());
-		effects
-			.add(this.guiData, "squeeze")
-			.name("Squeeze")
-			.onChange(() => this.updateUniforms());
-		effects
-			.add(this.guiData, "squeezeMin", 0, 1)
-			.step(0.01)
-			.name("Squeeze Min")
-			.onChange(() => this.updateUniforms());
-		effects
-			.add(this.guiData, "squeezeMax", 0, 1)
-			.step(0.01)
-			.name("Squeeze Max")
-			.onChange(() => this.updateUniforms());
-		effects
-			.add(this.guiData, "dualStroke")
-			.name("Dual Stroke")
-			.onChange(() => this.updateUniforms());
-		effects
-			.add(this.guiData, "secondThickness", 0, 0.2)
-			.step(0.001)
-			.name("Dual Thick")
-			.onChange(() => this.updateUniforms());
-	}
-
-	setupGeometryControls(shader) {
-		const geom = shader.addFolder("Geometry");
-		geom
-			.add(this.guiData, "name", [
-				"TorusKnot",
-				"Icosphere",
-				"Tube",
-				"Sphere",
-				"Torus",
-			])
-			.name("Geometry")
-			.onChange(() => this.updateGeometry());
-		geom
-			.add(this.guiData, "edgeRemoval")
-			.name("Edge Removal")
-			.onChange(() => this.updateGeometry());
-	}
-
-	randomColors() {
-		this.renderer.palette =
-			palettes[Math.floor(Math.random() * palettes.length)].slice();
-		this.guiData.backgroundHex = this.renderer.palette.shift();
-		this.guiData.fillHex = this.renderer.palette[0];
-		this.guiData.strokeHex = this.renderer.palette[1];
-		this.updateColors();
-
-		this.renderer.gui.controllersRecursive().forEach((controller) => {
-			controller.updateDisplay();
-		});
-	}
-
-	updateColors() {
-		this.renderer.updateColors(
-			this.guiData.backgroundHex,
-			this.guiData.fillHex,
-			this.guiData.strokeHex
-		);
-	}
-
-	updateUniforms() {
-		this.renderer.updateUniforms(this.guiData);
-	}
-
-	updateGeometry() {
-		this.renderer.createGeometry(this.guiData.name, this.guiData.edgeRemoval);
-	}
-
-	updateAll() {
-		this.updateGeometry();
-		this.updateColors();
-		this.updateUniforms();
-	}
-
-	checkMobileAndClose() {
-		const isMobile = /(Android|iPhone|iOS|iPod|iPad)/i.test(
-			navigator.userAgent
-		);
-		if (isMobile) {
-			this.renderer.gui.close();
-		}
-	}
-}
-
 // Initialize the application
 const canvas = document.querySelector("#canvas");
-const app = new WireframeRenderer(canvas);
+const app = new WireframeDemo(canvas);
 
 // Start animation
-app.startAnimation();
+app.animate();
 
 // Export for potential external use
 export default app;
