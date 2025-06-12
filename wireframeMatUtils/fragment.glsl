@@ -2,10 +2,11 @@ varying vec3 vBarycentric;
 varying float vEven;
 varying vec2 vUv;
 varying vec3 vPosition;
+varying vec4 vWorldPosition;
 
 uniform float time;
 uniform float thickness;
-uniform float secondThickness;
+uniform float dualThickness;
 
 uniform float dashRepeats;
 uniform float dashLength;
@@ -18,10 +19,18 @@ uniform bool insideAltColor;
 uniform bool dualStroke;
 uniform bool noiseA;
 uniform bool noiseB;
+uniform float noiseAIntensity;
+uniform float noiseBIntensity;
 
 uniform bool squeeze;
 uniform float squeezeMin;
 uniform float squeezeMax;
+
+// Depth fade uniforms
+uniform bool depthFade;
+uniform float depthFadeNear;
+uniform float depthFadeFar;
+uniform float depthFadeMin;
 
 uniform vec3 stroke;
 uniform vec3 fill;
@@ -160,14 +169,27 @@ float computeScreenSpaceWireframe (vec3 barycentric, float lineWidth) {
 // This function returns the fragment color for our styled wireframe effect
 // based on the barycentric coordinates for this fragment
 vec4 getStyledWireframe (vec3 barycentric) {
-  // this will be our signed distance for the wireframe edge
-  float d = min(min(barycentric.x, barycentric.y), barycentric.z);
-
   // we can modify the distance field to create interesting effects & masking
   float noiseOff = 0.0;
-  if (noiseA) noiseOff += noise(vec4(vPosition.xyz * 1.0, time * 0.35)) * 0.15;
-  if (noiseB) noiseOff += noise(vec4(vPosition.xyz * 80.0, time * 0.5)) * 0.12;
-  d += noiseOff;
+  if (noiseA) noiseOff += noise(vec4(vPosition.xyz * 1.0, time * 0.35)) * noiseAIntensity;
+  if (noiseB) noiseOff += noise(vec4(vPosition.xyz * 80.0, time * 0.5)) * noiseBIntensity;
+  
+  // Calculate base thickness with optional depth fading
+  float baseThickness = thickness;
+  if (depthFade) {
+    // Calculate distance from camera to fragment
+    float distanceToCamera = length(vWorldPosition.xyz - cameraPosition);
+    
+    // Create depth fade factor (1.0 at near distance, depthFadeMin at far distance)
+    float depthFactor = smoothstep(depthFadeNear, depthFadeFar, distanceToCamera);
+    float thicknessFactor = mix(1.0, depthFadeMin, depthFactor);
+    
+    baseThickness *= thicknessFactor;
+  }
+  
+  // Use screen-space wireframe for consistent thickness, incorporating noise
+  float noisyThickness = baseThickness + noiseOff;
+  float wireframe = computeScreenSpaceWireframe(barycentric, noisyThickness);
 
   // for dashed rendering, we can use this to get the 0 .. 1 value of the line length
   float positionAlong = max(barycentric.x, barycentric.y);
@@ -175,12 +197,14 @@ vec4 getStyledWireframe (vec3 barycentric) {
     positionAlong = 1.0 - positionAlong;
   }
 
-  // the thickness of the stroke
-  float computedThickness = thickness;
+  // the thickness of the stroke - use wireframe directly for screen-space consistency
+  float edge = wireframe;
 
   // if we want to shrink the thickness toward the center of the line segment
   if (squeeze) {
-    computedThickness *= mix(squeezeMin, squeezeMax, (1.0 - sin(positionAlong * PI)));
+    float squeezeFactor = mix(squeezeMin, squeezeMax, (1.0 - sin(positionAlong * PI)));
+    // Apply noise offset to the squeezed thickness to maintain noise effect
+    edge = computeScreenSpaceWireframe(barycentric, noisyThickness * squeezeFactor);
   }
 
   // if we should create a dash pattern
@@ -199,11 +223,9 @@ vec4 getStyledWireframe (vec3 barycentric) {
 
     // create the repeating dash pattern
     float pattern = fract((positionAlong + offset) * dashRepeats);
-    computedThickness *= 1.0 - aastep(dashLength, pattern);
+    float dashMask = 1.0 - aastep(dashLength, pattern);
+    edge *= dashMask;
   }
-
-  // compute the anti-aliased stroke edge  
-  float edge = 1.0 - aastep(computedThickness, d);
 
   // now compute the final color of the mesh
   vec4 outColor = vec4(0.0);
@@ -216,8 +238,16 @@ vec4 getStyledWireframe (vec3 barycentric) {
     vec3 mainStroke = mix(fill, stroke, edge);
     outColor.a = 1.0;
     if (dualStroke) {
-      float inner = 1.0 - aastep(secondThickness, d);
-      vec3 wireColor = mix(fill, stroke, abs(inner - edge));
+      // Apply depth fade to dual stroke as well
+      float dualThick = dualThickness;
+      if (depthFade) {
+        float distanceToCamera = length(vWorldPosition.xyz - cameraPosition);
+        float depthFactor = smoothstep(depthFadeNear, depthFadeFar, distanceToCamera);
+        float thicknessFactor = mix(1.0, depthFadeMin, depthFactor);
+        dualThick *= thicknessFactor;
+      }
+      float secondWireframe = computeScreenSpaceWireframe(barycentric, dualThick);
+      vec3 wireColor = mix(fill, stroke, abs(secondWireframe - edge));
       outColor.rgb = wireColor;
     } else {
       outColor.rgb = mainStroke;

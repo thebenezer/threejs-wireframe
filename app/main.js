@@ -49,11 +49,24 @@ class WireframeDemo {
 
 	init() {
 		this.initMaterial();
-		// Create cube
+		// Create instanced cube
 		const cubeGeometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
 		const preparedCubeGeometry = prepareWireframeGeometry(cubeGeometry, true);
-		const cubeMesh = new THREE.Mesh(preparedCubeGeometry, this.material);
-		cubeMesh.position.set(-2, 0, 0);
+		const instancedCubeMesh = new THREE.InstancedMesh(
+			preparedCubeGeometry,
+			this.material,
+			2
+		);
+
+		// Set up instance transforms
+		const matrix = new THREE.Matrix4();
+		// First instance at position (-3, 0, 0)
+		matrix.setPosition(-3, 0, 0);
+		instancedCubeMesh.setMatrixAt(0, matrix);
+		// Second instance at position (-1, 0, 0)
+		matrix.setPosition(-1, 0, 0);
+		instancedCubeMesh.setMatrixAt(1, matrix);
+		instancedCubeMesh.instanceMatrix.needsUpdate = true;
 
 		// Create torus
 		const torusGeometry = GeometryFactory.create("Torus");
@@ -62,22 +75,29 @@ class WireframeDemo {
 		torusMesh.position.set(2, 0, 0);
 
 		// Add to scene and store references
-		this.scene.add(cubeMesh);
+		this.scene.add(instancedCubeMesh);
 		this.scene.add(torusMesh);
-		this.meshes.push(cubeMesh, torusMesh);
+		this.meshes.push(instancedCubeMesh, torusMesh);
 	}
 
 	initMaterial() {
 		this.material = new WireframeMaterial({
 			fill: new THREE.Color(this.palette[0]),
 			stroke: new THREE.Color(this.palette[1]),
-			thickness: 0.01,
-			secondThickness: 0.05,
+			thickness: 15.0,
+			dualThickness: 0.05,
 			dashEnabled: true,
 			dashRepeats: 2.0,
 			dashLength: 0.55,
+			squeeze: true,
 			squeezeMin: 0.1,
 			squeezeMax: 1.0,
+			noiseAIntensity: 10,
+			noiseBIntensity: 7.0,
+			depthFade: true,
+			depthFadeNear: 1.0,
+			depthFadeFar: 20.0,
+			depthFadeMin: 0.1,
 		});
 	}
 
@@ -88,6 +108,9 @@ class WireframeDemo {
 		// Update orbit controls
 		this.controls.update();
 		this.material.updateTime(time);
+
+		// Update camera position for depth fade effect
+		this.material.updateCameraPosition(this.camera);
 
 		// Update all meshes in demo scene
 		this.meshes.forEach((mesh) => {
@@ -101,39 +124,14 @@ class WireframeDemo {
 	updateColors(backgroundHex, fillHex, strokeHex) {
 		this.canvas.style.background = backgroundHex;
 		this.renderer.setClearColor(backgroundHex, 1.0);
-		this.material.uniforms.fill.value.setStyle(fillHex);
-		this.material.uniforms.stroke.value.setStyle(strokeHex);
-
-		// Update demo scene materials
-		this.meshes.forEach((mesh, index) => {
-			if (mesh.material && mesh.material.uniforms) {
-				const fillIndex = index * 2;
-				const strokeIndex = index * 2 + 1;
-				mesh.material.uniforms.fill.value.setStyle(
-					this.palette[fillIndex] || fillHex
-				);
-				mesh.material.uniforms.stroke.value.setStyle(
-					this.palette[strokeIndex] || strokeHex
-				);
-			}
-		});
+		this.material.uniforms.fill.value.set(fillHex);
+		this.material.uniforms.stroke.value.set(strokeHex);
 	}
 
 	updateUniforms(updates) {
 		Object.entries(updates).forEach(([key, value]) => {
 			if (this.material.uniforms[key]) {
 				this.material.uniforms[key].value = value;
-			}
-		});
-
-		// Update demo scene materials
-		this.meshes.forEach((mesh) => {
-			if (mesh.material && mesh.material.uniforms) {
-				Object.entries(updates).forEach(([key, value]) => {
-					if (mesh.material.uniforms[key]) {
-						mesh.material.uniforms[key].value = value;
-					}
-				});
 			}
 		});
 	}
@@ -200,22 +198,40 @@ class WireframeDemo {
 			.name("See Through")
 			.onChange(() => this.updateUniforms(guiData));
 		shader
-			.add(guiData, "thickness", 0.005, 0.2)
-			.step(0.001)
+			.add(guiData, "thickness", 0.1, 100)
+			.step(0.01)
 			.name("Thickness")
 			.onChange(() => this.updateUniforms(guiData));
 		shader
 			.addColor(guiData, "backgroundHex")
 			.name("Background")
-			.onChange(() => this.updateColors(guiData));
+			.onChange(() =>
+				this.updateColors(
+					guiData.backgroundHex,
+					guiData.fillHex,
+					guiData.strokeHex
+				)
+			);
 		shader
 			.addColor(guiData, "fillHex")
 			.name("Fill")
-			.onChange(() => this.updateColors(guiData));
+			.onChange(() =>
+				this.updateColors(
+					guiData.backgroundHex,
+					guiData.fillHex,
+					guiData.strokeHex
+				)
+			);
 		shader
 			.addColor(guiData, "strokeHex")
 			.name("Stroke")
-			.onChange(() => this.updateColors(guiData));
+			.onChange(() =>
+				this.updateColors(
+					guiData.backgroundHex,
+					guiData.fillHex,
+					guiData.strokeHex
+				)
+			);
 		shader.add(guiData, "randomColors").name("Random Palette");
 		shader.add(guiData, "saveScreenshot").name("Save PNG");
 
@@ -223,7 +239,7 @@ class WireframeDemo {
 		const dash = shader.addFolder("Dash");
 		dash
 			.add(guiData, "dashEnabled")
-			.name("Enabled")
+			.name("dashEnabled")
 			.onChange(() => this.updateUniforms(guiData));
 		dash
 			.add(guiData, "dashAnimate")
@@ -251,8 +267,18 @@ class WireframeDemo {
 			.name("Noise Big")
 			.onChange(() => this.updateUniforms(guiData));
 		effects
+			.add(guiData, "noiseAIntensity", 0, 20)
+			.step(0.01)
+			.name("Big Noise Intensity")
+			.onChange(() => this.updateUniforms(guiData));
+		effects
 			.add(guiData, "noiseB")
 			.name("Noise Small")
+			.onChange(() => this.updateUniforms(guiData));
+		effects
+			.add(guiData, "noiseBIntensity", 0, 20)
+			.step(0.01)
+			.name("Small Noise Intensity")
 			.onChange(() => this.updateUniforms(guiData));
 		effects
 			.add(guiData, "insideAltColor")
@@ -277,9 +303,31 @@ class WireframeDemo {
 			.name("Dual Stroke")
 			.onChange(() => this.updateUniforms(guiData));
 		effects
-			.add(guiData, "secondThickness", 0, 0.2)
+			.add(guiData, "dualThickness", 0, 50)
 			.step(0.001)
 			.name("Dual Thick")
+			.onChange(() => this.updateUniforms(guiData));
+
+		// Depth fade controls
+		const depthFade = shader.addFolder("Depth Fade");
+		depthFade
+			.add(guiData, "depthFade")
+			.name("Enable Depth Fade")
+			.onChange(() => this.updateUniforms(guiData));
+		depthFade
+			.add(guiData, "depthFadeNear", 1, 50)
+			.step(0.1)
+			.name("Fade Near Distance")
+			.onChange(() => this.updateUniforms(guiData));
+		depthFade
+			.add(guiData, "depthFadeFar", 1, 100)
+			.step(0.1)
+			.name("Fade Far Distance")
+			.onChange(() => this.updateUniforms(guiData));
+		depthFade
+			.add(guiData, "depthFadeMin", 0.01, 1)
+			.step(0.01)
+			.name("Min Thickness Scale")
 			.onChange(() => this.updateUniforms(guiData));
 
 		// Check if mobile and close GUI
