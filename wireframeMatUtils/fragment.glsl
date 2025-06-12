@@ -1,3 +1,6 @@
+// Precision qualifiers for mobile optimization
+precision mediump float;
+
 varying vec3 vBarycentric;
 varying float vEven;
 varying vec2 vUv;
@@ -158,38 +161,53 @@ float aastep (float threshold, float dist) {
   return smoothstep(threshold - afwidth, threshold + afwidth, dist);
 }
 
-// This function is not currently used, but it can be useful
+// Optimized version that reuses pre-calculated derivatives
+float computeScreenSpaceWireframeOptimized(vec3 barycentric, vec3 derivatives, float lineWidth) {
+  vec3 smoothed = smoothstep(derivatives * ((lineWidth * 0.5) - 0.5), derivatives * ((lineWidth * 0.5) + 0.5), barycentric);
+  return 1.0 - min(min(smoothed.x, smoothed.y), smoothed.z);
+}
+
+// Backward compatibility - this function is not currently used, but it can be useful
 // to achieve a fixed width wireframe regardless of z-depth
 float computeScreenSpaceWireframe (vec3 barycentric, float lineWidth) {
   vec3 dist = fwidth(barycentric);
-  vec3 smoothed = smoothstep(dist * ((lineWidth * 0.5) - 0.5), dist * ((lineWidth * 0.5) + 0.5), barycentric);
-  return 1.0 - min(min(smoothed.x, smoothed.y), smoothed.z);
+  return computeScreenSpaceWireframeOptimized(barycentric, dist, lineWidth);
 }
 
 // This function returns the fragment color for our styled wireframe effect
 // based on the barycentric coordinates for this fragment
 vec4 getStyledWireframe (vec3 barycentric) {
-  // we can modify the distance field to create interesting effects & masking
+  // Cache fwidth calculation once - this is expensive
+  vec3 barycentricDerivatives = fwidth(barycentric);
+  
+  // Calculate noise offset using preprocessor conditionals
   float noiseOff = 0.0;
-  if (noiseA) noiseOff += noise(vec4(vPosition.xyz * 1.0, time * 0.35)) * noiseAIntensity;
-  if (noiseB) noiseOff += noise(vec4(vPosition.xyz * 80.0, time * 0.5)) * noiseBIntensity;
+  #ifdef NOISE_A_ENABLED
+    noiseOff += noise(vec4(vPosition.xyz * 1.0, time * 0.35)) * noiseAIntensity;
+  #endif
+  #ifdef NOISE_B_ENABLED
+    noiseOff += noise(vec4(vPosition.xyz * 80.0, time * 0.5)) * noiseBIntensity;
+  #endif
   
   // Calculate base thickness with optional depth fading
   float baseThickness = thickness;
-  if (depthFade) {
+  float distanceToCamera = 0.0;
+  float thicknessFactor = 1.0;
+  
+  #ifdef DEPTH_FADE_ENABLED
     // Calculate distance from camera to fragment
-    float distanceToCamera = length(vWorldPosition.xyz - cameraPosition);
+    distanceToCamera = length(vWorldPosition.xyz - cameraPosition);
     
     // Create depth fade factor (1.0 at near distance, depthFadeMin at far distance)
     float depthFactor = smoothstep(depthFadeNear, depthFadeFar, distanceToCamera);
-    float thicknessFactor = mix(1.0, depthFadeMin, depthFactor);
+    thicknessFactor = mix(1.0, depthFadeMin, depthFactor);
     
     baseThickness *= thicknessFactor;
-  }
+  #endif
   
-  // Use screen-space wireframe for consistent thickness, incorporating noise
+  // Use optimized screen-space wireframe with cached derivatives
   float noisyThickness = baseThickness + noiseOff;
-  float wireframe = computeScreenSpaceWireframe(barycentric, noisyThickness);
+  float wireframe = computeScreenSpaceWireframeOptimized(barycentric, barycentricDerivatives, noisyThickness);
 
   // for dashed rendering, we can use this to get the 0 .. 1 value of the line length
   float positionAlong = max(barycentric.x, barycentric.y);
@@ -201,58 +219,57 @@ vec4 getStyledWireframe (vec3 barycentric) {
   float edge = wireframe;
 
   // if we want to shrink the thickness toward the center of the line segment
-  if (squeeze) {
+  #ifdef SQUEEZE_ENABLED
     float squeezeFactor = mix(squeezeMin, squeezeMax, (1.0 - sin(positionAlong * PI)));
     // Apply noise offset to the squeezed thickness to maintain noise effect
-    edge = computeScreenSpaceWireframe(barycentric, noisyThickness * squeezeFactor);
-  }
+    edge = computeScreenSpaceWireframeOptimized(barycentric, barycentricDerivatives, noisyThickness * squeezeFactor);
+  #endif
 
   // if we should create a dash pattern
-  if (dashEnabled) {
+  #ifdef DASH_ENABLED
     // here we offset the stroke position depending on whether it
     // should overlap or not
     float offset = 1.0 / dashRepeats * dashLength / 2.0;
-    if (!dashOverlap) {
+    #ifndef DASH_OVERLAP
       offset += 1.0 / dashRepeats / 2.0;
-    }
+    #endif
 
     // if we should animate the dash or not
-    if (dashAnimate) {
+    #ifdef DASH_ANIMATE
       offset += time * 0.22;
-    }
+    #endif
 
     // create the repeating dash pattern
     float pattern = fract((positionAlong + offset) * dashRepeats);
     float dashMask = 1.0 - aastep(dashLength, pattern);
     edge *= dashMask;
-  }
+  #endif
 
   // now compute the final color of the mesh
   vec4 outColor = vec4(0.0);
-  if (seeThrough) {
+  #ifdef SEE_THROUGH
     outColor = vec4(stroke, edge);
-    if (insideAltColor && !gl_FrontFacing) {
-      outColor.rgb = fill;
-    }
-  } else {
+    #ifdef INSIDE_ALT_COLOR
+      if (!gl_FrontFacing) {
+        outColor.rgb = fill;
+      }
+    #endif
+  #else
     vec3 mainStroke = mix(fill, stroke, edge);
     outColor.a = 1.0;
-    if (dualStroke) {
-      // Apply depth fade to dual stroke as well
+    #ifdef DUAL_STROKE_ENABLED
+      // Reuse cached depth fade calculations for dual stroke
       float dualThick = dualThickness;
-      if (depthFade) {
-        float distanceToCamera = length(vWorldPosition.xyz - cameraPosition);
-        float depthFactor = smoothstep(depthFadeNear, depthFadeFar, distanceToCamera);
-        float thicknessFactor = mix(1.0, depthFadeMin, depthFactor);
+      #ifdef DEPTH_FADE_ENABLED
         dualThick *= thicknessFactor;
-      }
-      float secondWireframe = computeScreenSpaceWireframe(barycentric, dualThick);
+      #endif
+      float secondWireframe = computeScreenSpaceWireframeOptimized(barycentric, barycentricDerivatives, dualThick);
       vec3 wireColor = mix(fill, stroke, abs(secondWireframe - edge));
       outColor.rgb = wireColor;
-    } else {
+    #else
       outColor.rgb = mainStroke;
-    }
-  }
+    #endif
+  #endif
 
   return outColor;
 }
