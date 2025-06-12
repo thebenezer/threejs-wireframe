@@ -5,6 +5,7 @@ import { GUI } from "lil-gui";
 import palettes from "nice-color-palettes";
 import {
 	WireframeMaterial,
+	WireframeMaterialManager,
 	prepareWireframeGeometry,
 } from "../wireframeMatUtils/WireframeMaterial.js";
 
@@ -34,6 +35,10 @@ class WireframeDemo {
 		);
 		this.camera.position.set(5, 3, 5);
 		this.initControls();
+
+		// Initialize material manager for optimized shader variants
+		this.materialManager = new WireframeMaterialManager();
+
 		this.init();
 		this.setupGUI();
 
@@ -81,7 +86,8 @@ class WireframeDemo {
 	}
 
 	initMaterial() {
-		this.material = new WireframeMaterial({
+		// Use material manager to get optimized material variant
+		this.material = this.materialManager.getMaterial({
 			fill: new THREE.Color(this.palette[0]),
 			stroke: new THREE.Color(this.palette[1]),
 			thickness: 15.0,
@@ -92,6 +98,8 @@ class WireframeDemo {
 			squeeze: true,
 			squeezeMin: 0.1,
 			squeezeMax: 1.0,
+			noiseA: true,
+			noiseB: true,
 			noiseAIntensity: 10,
 			noiseBIntensity: 7.0,
 			depthFade: true,
@@ -108,9 +116,6 @@ class WireframeDemo {
 		// Update orbit controls
 		this.controls.update();
 		this.material.updateTime(time);
-
-		// Update camera position for depth fade effect
-		this.material.updateCameraPosition(this.camera);
 
 		// Update all meshes in demo scene
 		this.meshes.forEach((mesh) => {
@@ -129,11 +134,40 @@ class WireframeDemo {
 	}
 
 	updateUniforms(updates) {
+		// Feature flags that affect shader defines
+		const featureFlags = [
+			"noiseA",
+			"noiseB",
+			"depthFade",
+			"squeeze",
+			"dashEnabled",
+			"dashAnimate",
+			"dashOverlap",
+			"dualStroke",
+			"seeThrough",
+			"insideAltColor",
+		];
+
+		// Check if any feature flags are being updated
+		const featureUpdates = {};
+		let hasFeatureChanges = false;
+
 		Object.entries(updates).forEach(([key, value]) => {
 			if (this.material.uniforms[key]) {
 				this.material.uniforms[key].value = value;
 			}
+
+			// Track feature flag changes
+			if (featureFlags.includes(key) && this.material.features[key] !== value) {
+				featureUpdates[key] = value;
+				hasFeatureChanges = true;
+			}
 		});
+
+		// Update material features and trigger shader recompilation if needed
+		if (hasFeatureChanges) {
+			this.material.updateFeatures(featureUpdates);
+		}
 	}
 	setupEventListeners() {
 		window.addEventListener("resize", () => this.resize());
@@ -337,6 +371,24 @@ class WireframeDemo {
 		if (isMobile) {
 			this.gui.close();
 		}
+
+		// Add performance monitoring folder
+		const performance = this.gui.addFolder("Performance");
+		const perfData = {
+			showCacheStats: () => {
+				const stats = this.materialManager.getCacheStats();
+				console.log("Material Cache Stats:", stats);
+				alert(
+					`Cached shader variants: ${stats.cachedVariants}\nMemory estimate: ${stats.memoryEstimate}`
+				);
+			},
+			clearCache: () => {
+				this.materialManager.clearCache();
+				console.log("Material cache cleared");
+			},
+		};
+		performance.add(perfData, "showCacheStats").name("Show Cache Stats");
+		performance.add(perfData, "clearCache").name("Clear Cache");
 
 		// Store guiData for randomColors method
 		this.guiData = guiData;
