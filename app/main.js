@@ -1,6 +1,10 @@
 import * as THREE from "three";
 import { NURBSCurve } from "three/examples/jsm/curves/NURBSCurve.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { GUI } from "lil-gui";
 import palettes from "nice-color-palettes";
 import {
@@ -8,7 +12,11 @@ import {
 	WireframeMaterialManager,
 	prepareWireframeGeometry,
 } from "../wireframeMatUtils/WireframeMaterial.js";
-
+import { BUFLoader, prepareBUFWireframeGeometry } from "../extras/BUFLoader.js";
+import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+import { Line2 } from "three/examples/jsm/Addons.js";
 class WireframeDemo {
 	constructor(canvas) {
 		this.meshes = [];
@@ -31,13 +39,16 @@ class WireframeDemo {
 			45,
 			window.innerWidth / window.innerHeight,
 			0.01,
-			100
+			1000
 		);
-		this.camera.position.set(5, 3, 5);
+		this.camera.position.set(0, 0, 8);
 		this.initControls();
 
 		// Initialize material manager for optimized shader variants
 		this.materialManager = new WireframeMaterialManager();
+
+		// Store line material reference for resolution updates
+		this.lineMaterial = null;
 
 		this.init();
 		this.setupGUI();
@@ -54,6 +65,7 @@ class WireframeDemo {
 
 	init() {
 		this.initMaterial();
+
 		// Create instanced cube
 		const cubeGeometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
 		const preparedCubeGeometry = prepareWireframeGeometry(cubeGeometry, true);
@@ -83,6 +95,9 @@ class WireframeDemo {
 		this.scene.add(instancedCubeMesh);
 		this.scene.add(torusMesh);
 		this.meshes.push(instancedCubeMesh, torusMesh);
+
+		// Load Suzanne GLB model
+		this.loadModels();
 	}
 
 	initMaterial() {
@@ -116,13 +131,6 @@ class WireframeDemo {
 		// Update orbit controls
 		this.controls.update();
 		this.material.updateTime(time);
-
-		// Update all meshes in demo scene
-		this.meshes.forEach((mesh) => {
-			if (mesh.material && mesh.material.updateTime) {
-				mesh.material.updateTime(time);
-			}
-		});
 		requestAnimationFrame(this.animate);
 	};
 
@@ -181,6 +189,11 @@ class WireframeDemo {
 		this.renderer.setSize(width, height);
 		this.camera.aspect = width / height;
 		this.camera.updateProjectionMatrix();
+
+		// Update line material resolution for proper line width scaling
+		if (this.lineMaterial) {
+			this.lineMaterial.resolution.set(width, height);
+		}
 	}
 	saveScreenshot() {
 		const width = 2048;
@@ -372,24 +385,6 @@ class WireframeDemo {
 			this.gui.close();
 		}
 
-		// Add performance monitoring folder
-		const performance = this.gui.addFolder("Performance");
-		const perfData = {
-			showCacheStats: () => {
-				const stats = this.materialManager.getCacheStats();
-				console.log("Material Cache Stats:", stats);
-				alert(
-					`Cached shader variants: ${stats.cachedVariants}\nMemory estimate: ${stats.memoryEstimate}`
-				);
-			},
-			clearCache: () => {
-				this.materialManager.clearCache();
-				console.log("Material cache cleared");
-			},
-		};
-		performance.add(perfData, "showCacheStats").name("Show Cache Stats");
-		performance.add(perfData, "clearCache").name("Clear Cache");
-
 		// Store guiData for randomColors method
 		this.guiData = guiData;
 	}
@@ -410,6 +405,59 @@ class WireframeDemo {
 		this.gui.controllersRecursive().forEach((controller) => {
 			controller.updateDisplay();
 		});
+	}
+
+	loadModels() {
+		// Load GLB cube (currently at top position)
+		const gltfLoader = new GLTFLoader();
+
+		// Setup Draco loader for compressed geometries
+		const dracoLoader = new DRACOLoader();
+		dracoLoader.setDecoderPath(
+			"https://www.gstatic.com/draco/versioned/decoders/1.5.6/"
+		);
+		gltfLoader.setDRACOLoader(dracoLoader);
+
+		// Create LineMaterial for LineSegments2 with controllable width
+		this.lineMaterial = new LineMaterial({
+			color: "#ff0000",
+			linewidth: 2, // Line width in pixels
+			vertexColors: false,
+			dashed: false,
+			dashSize: 0.1,
+			gapSize: 0.05,
+		});
+
+		// Set resolution for proper line width scaling
+		this.lineMaterial.resolution.set(window.innerWidth, window.innerHeight);
+
+		gltfLoader.load(
+			"/02.glb",
+			(gltf) => {
+				gltf.scene.traverse((child) => {
+					if (child.isMesh) {
+						// child.visible = false; // Hide original mesh
+						const edgeGeometry = new THREE.EdgesGeometry(child.geometry, 1.0);
+						// Convert to LineSegmentsGeometry for LineSegments2
+						const lineSegmentsGeometry = new LineSegmentsGeometry();
+						lineSegmentsGeometry.fromEdgesGeometry(edgeGeometry);
+						// Create LineSegments2 with the new geometry and material
+						const edgeMesh = new Line2(lineSegmentsGeometry, this.lineMaterial);
+						edgeMesh.computeLineDistances(); // Required for dashed lines
+						// Add to scene
+						gltf.scene.add(edgeMesh);
+						// child.geometry = prepareWireframeGeometry(child.geometry, true);
+						// child.material = this.material;
+					}
+				});
+
+				this.scene.add(gltf.scene);
+			},
+			() => {},
+			(error) => {
+				console.error("Error loading GLB cube model:", error);
+			}
+		);
 	}
 }
 
