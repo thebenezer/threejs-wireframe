@@ -226,7 +226,7 @@ class WireframeDemo {
 
 		const material = new LineMaterial({
 			color: "#ff4400",
-			linewidth: 4,
+			linewidth: 1,
 			resolution: new THREE.Vector2(window.innerWidth, window.innerHeight),
 			transparent: true,
 			opacity: 1,
