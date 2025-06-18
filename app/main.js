@@ -90,6 +90,7 @@ class WireframeDemo {
 		this.canvas = canvas;
 		this.palette = palettes[13].slice();
 		this.background = "#000000"; // Default background color
+		this.outlineMaterials = []; // Store outline materials for resolution updates
 
 		this.renderer = new THREE.WebGLRenderer({
 			antialias: true,
@@ -182,37 +183,74 @@ class WireframeDemo {
 	}
 
 	loadModel2() {
-		this.gltfLoader.load("./cylinder.glb", (gltf) => {
-			const mesh = gltf.scene.children[0];
-			const outlinedMesh = this.attachOutlineToMesh(mesh, mesh.name);
-			this.scene.add(outlinedMesh);
-		});
+		this.gltfLoader.load(
+			"./cylinder.glb",
+			(gltf) => {
+				console.log("GLB loaded successfully");
+
+				// Traverse through the entire GLB scene to find all meshes
+				gltf.scene.traverse((child) => {
+					if (child.isMesh) {
+						console.log(`Found mesh: ${child.name || "unnamed"}`);
+						// Try to attach outline to this mesh
+						this.attachOutlineToMesh(child, child.name);
+					}
+				});
+
+				// Add the entire scene to our scene
+				this.scene.add(gltf.scene);
+			},
+			(progress) => {
+				console.log(
+					"Loading progress:",
+					(progress.loaded / progress.total) * 100 + "%"
+				);
+			},
+			(error) => {
+				console.error("Error loading GLB:", error);
+			}
+		);
 	}
 
-	// esperiment to create outline from JSON data from blender
+	// experiment to create outline from JSON data from blender
 	attachOutlineToMesh(mesh, name) {
 		const chains = data[name];
-		if (!chains) return;
+		if (!chains) {
+			console.log(`No outline data found for mesh: ${name}`);
+			return;
+		}
 
-		const group = new THREE.Group();
-		group.add(mesh);
+		console.log(
+			`Creating outline for mesh: ${name} with ${chains.length} chains`
+		);
 
 		const material = new LineMaterial({
-			color: 0xffffff,
-			linewidth: 2,
+			color: "#ff4400",
+			linewidth: 4,
 			resolution: new THREE.Vector2(window.innerWidth, window.innerHeight),
 			transparent: true,
 			opacity: 1,
+			polygonOffset: true,
+			polygonOffsetFactor: -1,
+			polygonOffsetUnits: -1,
 		});
 
-		chains.forEach((chain) => {
+		// Store the material for resolution updates
+		this.outlineMaterials.push(material);
+
+		// Create outline lines and add them directly to the mesh
+		chains.forEach((chain, index) => {
 			const geom = new LineGeometry();
 			geom.setPositions(chain);
 			const line = new Line2(geom, material);
-			group.add(line);
-		});
 
-		return group;
+			// Add the outline line directly to the mesh
+			// This way the outline will move with the mesh
+			mesh.add(line);
+			console.log(
+				`Added outline chain ${index + 1}/${chains.length} to ${name}`
+			);
+		});
 	}
 
 	initMaterial() {
@@ -309,6 +347,13 @@ class WireframeDemo {
 		if (this.lineMaterial) {
 			this.lineMaterial.resolution.set(width, height);
 		}
+
+		// Update resolution for all stored outline materials
+		this.outlineMaterials.forEach((material) => {
+			if (material.resolution) {
+				material.resolution.set(width, height);
+			}
+		});
 	}
 	saveScreenshot() {
 		const width = 2048;
