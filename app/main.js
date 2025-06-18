@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { NURBSCurve } from "three/examples/jsm/curves/NURBSCurve.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -12,17 +13,83 @@ import {
 	WireframeMaterialManager,
 	prepareWireframeGeometry,
 } from "../wireframeMatUtils/WireframeMaterial.js";
-import { BUFLoader, prepareBUFWireframeGeometry } from "../extras/BUFLoader.js";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
-import { Line2 } from "three/examples/jsm/Addons.js";
+import { Line2, LineGeometry } from "three/examples/jsm/Addons.js";
+// Import our new outline material
+import { OutlineMaterial } from "../wireframeV2/OutlineMaterial.js";
+
+import data from "./cylinder_outlines.json";
+
+class GeometryFactory {
+	static create(type) {
+		switch (type) {
+			case "TorusKnot":
+				const torusKnot = new THREE.TorusKnotGeometry(0.7, 0.3, 30, 4);
+				torusKnot.rotateY(-Math.PI * 0.5);
+				return torusKnot;
+
+			case "Icosphere":
+				return new THREE.IcosahedronGeometry(1, 1);
+
+			case "Tube":
+				return this.createTubeGeometry();
+
+			case "Sphere":
+				return new THREE.SphereGeometry(1, 20, 10);
+
+			case "Torus":
+				return new THREE.TorusGeometry(1, 0.3, 8, 30);
+
+			case "Cube":
+				return new THREE.BoxGeometry(1.5, 1.5, 1.5);
+
+			default:
+				return new THREE.TorusKnotGeometry(0.7, 0.3, 30, 4);
+		}
+	}
+
+	static createTubeGeometry() {
+		const baseGeom = new THREE.IcosahedronGeometry(1, 0);
+		const points = [];
+		const positionAttribute = baseGeom.getAttribute("position");
+
+		for (let i = 0; i < positionAttribute.count; i++) {
+			points.push(
+				new THREE.Vector3().fromBufferAttribute(positionAttribute, i)
+			);
+		}
+
+		baseGeom.dispose();
+		const curve = this.createSpline(points);
+		return new THREE.TubeGeometry(curve, 30, 0.3, 4, false);
+	}
+
+	static createSpline(points) {
+		const nurbsDegree = 3;
+		const nurbsKnots = [];
+
+		for (let i = 0; i <= nurbsDegree; i++) {
+			nurbsKnots.push(0);
+		}
+
+		const nurbsControlPoints = points.map((p, i, list) => {
+			const knot = (i + 1) / (list.length - nurbsDegree);
+			nurbsKnots.push(Math.max(Math.min(1, knot), 0));
+			return new THREE.Vector4(p.x, p.y, p.z, 1);
+		});
+
+		return new NURBSCurve(nurbsDegree, nurbsKnots, nurbsControlPoints);
+	}
+}
+
 class WireframeDemo {
 	constructor(canvas) {
 		this.meshes = [];
 		this.canvas = canvas;
 		this.palette = palettes[13].slice();
-		this.background = this.palette.shift();
+		this.background = "#000000"; // Default background color
 
 		this.renderer = new THREE.WebGLRenderer({
 			antialias: true,
@@ -91,13 +158,61 @@ class WireframeDemo {
 		const torusMesh = new THREE.Mesh(preparedTorusGeometry, this.material);
 		torusMesh.position.set(2, 0, 0);
 
-		// Add to scene and store references
-		this.scene.add(instancedCubeMesh);
-		this.scene.add(torusMesh);
-		this.meshes.push(instancedCubeMesh, torusMesh);
+		// Create test cube with custom outline shader (wireframeV2)
+		this.outlineMaterial = new OutlineMaterial({
+			color: new THREE.Color("#ff0000"), // Red color
+			opacity: 1.0,
+			outlineWidth: 0.1, // Width of the outline effect
+			outlineColor: new THREE.Color("#000000"), // Black outline
+		});
+		const cubeMesh = new THREE.Mesh(cubeGeometry, this.outlineMaterial);
+		cubeMesh.position.set(0, 1, 0); // Position at (0, 1, 0)
 
-		// Load Suzanne GLB model
-		this.loadModels();
+		// Add to scene and store references
+		// this.scene.add(instancedCubeMesh);
+		// this.scene.add(torusMesh);
+		// this.scene.add(cubeMesh); // Add our new cube
+		// this.meshes.push(instancedCubeMesh, torusMesh, cubeMesh);
+
+		// Load GLB model
+		this.gltfLoader = new GLTFLoader();
+
+		// this.loadModels();
+		this.loadModel2();
+	}
+
+	loadModel2() {
+		this.gltfLoader.load("./cylinder.glb", (gltf) => {
+			const mesh = gltf.scene.children[0];
+			const outlinedMesh = this.attachOutlineToMesh(mesh, mesh.name);
+			this.scene.add(outlinedMesh);
+		});
+	}
+
+	// esperiment to create outline from JSON data from blender
+	attachOutlineToMesh(mesh, name) {
+		const chains = data[name];
+		if (!chains) return;
+
+		const group = new THREE.Group();
+		group.add(mesh);
+
+		const material = new LineMaterial({
+			color: 0xffffff,
+			linewidth: 2,
+			resolution: new THREE.Vector2(window.innerWidth, window.innerHeight),
+			transparent: true,
+			opacity: 1,
+		});
+
+		chains.forEach((chain) => {
+			const geom = new LineGeometry();
+			geom.setPositions(chain);
+			const line = new Line2(geom, material);
+			group.add(line);
+		});
+
+		return group;
 	}
 
 	initMaterial() {
@@ -107,13 +222,13 @@ class WireframeDemo {
 			stroke: new THREE.Color(this.palette[1]),
 			thickness: 15.0,
 			dualThickness: 0.05,
-			dashEnabled: true,
+			dashEnabled: false,
 			dashRepeats: 2.0,
 			dashLength: 0.55,
 			squeeze: true,
 			squeezeMin: 0.1,
 			squeezeMax: 1.0,
-			noiseA: true,
+			noiseA: false,
 			noiseB: true,
 			noiseAIntensity: 10,
 			noiseBIntensity: 7.0,
@@ -409,7 +524,6 @@ class WireframeDemo {
 
 	loadModels() {
 		// Load GLB cube (currently at top position)
-		const gltfLoader = new GLTFLoader();
 
 		// Setup Draco loader for compressed geometries
 		const dracoLoader = new DRACOLoader();
@@ -421,23 +535,30 @@ class WireframeDemo {
 		// Create LineMaterial for LineSegments2 with controllable width
 		this.lineMaterial = new LineMaterial({
 			color: "#ff0000",
-			linewidth: 2, // Line width in pixels
+			linewidth: 3, // Line width in pixels
 			vertexColors: false,
 			dashed: false,
 			dashSize: 0.1,
 			gapSize: 0.05,
 		});
 
+		this.outlineMaterial = new OutlineMaterial({
+			color: new THREE.Color("#000000"), // Red color
+			opacity: 1.0,
+			outlineWidth: 0.1, // Width of the outline effect
+			outlineColor: new THREE.Color("#ffffff"), // Black outline
+		});
+
 		// Set resolution for proper line width scaling
 		this.lineMaterial.resolution.set(window.innerWidth, window.innerHeight);
 
 		gltfLoader.load(
-			"/02.glb",
+			"/ac1.glb",
 			(gltf) => {
 				gltf.scene.traverse((child) => {
 					if (child.isMesh) {
 						// child.visible = false; // Hide original mesh
-						const edgeGeometry = new THREE.EdgesGeometry(child.geometry, 1.0);
+						const edgeGeometry = new THREE.EdgesGeometry(child.geometry, 20);
 						// Convert to LineSegmentsGeometry for LineSegments2
 						const lineSegmentsGeometry = new LineSegmentsGeometry();
 						lineSegmentsGeometry.fromEdgesGeometry(edgeGeometry);
@@ -447,7 +568,7 @@ class WireframeDemo {
 						// Add to scene
 						gltf.scene.add(edgeMesh);
 						// child.geometry = prepareWireframeGeometry(child.geometry, true);
-						// child.material = this.material;
+						// child.material = this.outlineMaterial;
 					}
 				});
 
@@ -458,68 +579,6 @@ class WireframeDemo {
 				console.error("Error loading GLB cube model:", error);
 			}
 		);
-	}
-}
-
-class GeometryFactory {
-	static create(type) {
-		switch (type) {
-			case "TorusKnot":
-				const torusKnot = new THREE.TorusKnotGeometry(0.7, 0.3, 30, 4);
-				torusKnot.rotateY(-Math.PI * 0.5);
-				return torusKnot;
-
-			case "Icosphere":
-				return new THREE.IcosahedronGeometry(1, 1);
-
-			case "Tube":
-				return this.createTubeGeometry();
-
-			case "Sphere":
-				return new THREE.SphereGeometry(1, 20, 10);
-
-			case "Torus":
-				return new THREE.TorusGeometry(1, 0.3, 8, 30);
-
-			case "Cube":
-				return new THREE.BoxGeometry(1.5, 1.5, 1.5);
-
-			default:
-				return new THREE.TorusKnotGeometry(0.7, 0.3, 30, 4);
-		}
-	}
-
-	static createTubeGeometry() {
-		const baseGeom = new THREE.IcosahedronGeometry(1, 0);
-		const points = [];
-		const positionAttribute = baseGeom.getAttribute("position");
-
-		for (let i = 0; i < positionAttribute.count; i++) {
-			points.push(
-				new THREE.Vector3().fromBufferAttribute(positionAttribute, i)
-			);
-		}
-
-		baseGeom.dispose();
-		const curve = this.createSpline(points);
-		return new THREE.TubeGeometry(curve, 30, 0.3, 4, false);
-	}
-
-	static createSpline(points) {
-		const nurbsDegree = 3;
-		const nurbsKnots = [];
-
-		for (let i = 0; i <= nurbsDegree; i++) {
-			nurbsKnots.push(0);
-		}
-
-		const nurbsControlPoints = points.map((p, i, list) => {
-			const knot = (i + 1) / (list.length - nurbsDegree);
-			nurbsKnots.push(Math.max(Math.min(1, knot), 0));
-			return new THREE.Vector4(p.x, p.y, p.z, 1);
-		});
-
-		return new NURBSCurve(nurbsDegree, nurbsKnots, nurbsControlPoints);
 	}
 }
 
